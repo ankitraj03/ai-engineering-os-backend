@@ -8,6 +8,7 @@ import { OrganizationMembershipsModule } from './modules/organization-membership
 import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { GitOrganizationsModule } from './modules/git-organizations/git-organizations.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { RepositoriesModule } from './modules/repositories/repositories.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { AuthModule } from './modules/auth/auth.module';
     IntegrationsModule,
     GitOrganizationsModule,
     AuthModule,
+    RepositoriesModule,
   ],
 })
 export class AppModule {}
