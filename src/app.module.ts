@@ -1,13 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { DatabaseModule } from './database/database.module';
-import { SupabaseModule } from './database/supabase.module';
 import { HealthModule } from './health/health.module';
 import { UsersModule } from './modules/users/users.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { OrganizationMembershipsModule } from './modules/organization-memberships/organization-memberships.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { GitOrganizationsModule } from './modules/git-organizations/git-organizations.module';
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
@@ -20,9 +20,6 @@ import { GitOrganizationsModule } from './modules/git-organizations/git-organiza
     // Database connection & TypeORM infrastructure
     DatabaseModule,
 
-    // Centralized Supabase Client
-    SupabaseModule,
-
     // Health check & diagnostic module
     HealthModule,
 
@@ -32,6 +29,7 @@ import { GitOrganizationsModule } from './modules/git-organizations/git-organiza
     OrganizationMembershipsModule,
     IntegrationsModule,
     GitOrganizationsModule,
+    AuthModule,
   ],
 })
 export class AppModule {}

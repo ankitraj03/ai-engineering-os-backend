@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { SupabaseClientService } from '../../../database/supabase.client';
+import { DatabaseService } from '../../../database/database.service';
 import { Integration } from '../entities/integration.entity';
 import { IntegrationProvider, IntegrationStatus } from '../../../common/types/enums';
 import { handleDatabaseError } from '../../../common/errors/database-error.util';
 
 @Injectable()
 export class IntegrationsRepository {
-  constructor(private readonly supabaseClientService: SupabaseClientService) {}
+  constructor(private readonly databaseService: DatabaseService) {}
 
   async create(data: {
     organization_id: string;
@@ -14,94 +14,75 @@ export class IntegrationsRepository {
     provider_account_id?: string;
     status?: IntegrationStatus;
   }): Promise<Integration> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data: integration, error } = await client
-      .from('integrations')
-      .insert({
-        organization_id: data.organization_id,
-        provider: data.provider,
-        provider_account_id: data.provider_account_id || null,
-        status: data.status || IntegrationStatus.ACTIVE,
-      })
-      .select()
-      .single();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<Integration[]>(
+        `INSERT INTO integrations (organization_id, provider, provider_account_id, status)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [
+          data.organization_id,
+          data.provider,
+          data.provider_account_id || null,
+          data.status || IntegrationStatus.ACTIVE,
+        ]
+      );
+      return rows[0];
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return integration as Integration;
   }
 
   async findById(id: string): Promise<Integration | null> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('integrations')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<Integration[]>(
+        `SELECT * FROM integrations WHERE id = $1 LIMIT 1`,
+        [id]
+      );
+      return rows[0] || null;
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return data as Integration | null;
   }
 
   async findByOrganization(organizationId: string): Promise<Integration[]> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('integrations')
-      .select('*')
-      .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<Integration[]>(
+        `SELECT * FROM integrations WHERE organization_id = $1 ORDER BY created_at DESC`,
+        [organizationId]
+      );
+      return rows;
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return (data || []) as Integration[];
   }
 
   async findByProvider(
     organizationId: string,
     provider: string
   ): Promise<Integration | null> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('integrations')
-      .select('*')
-      .eq('organization_id', organizationId)
-      .eq('provider', provider)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<Integration[]>(
+        `SELECT * FROM integrations WHERE organization_id = $1 AND provider = $2 LIMIT 1`,
+        [organizationId, provider]
+      );
+      return rows[0] || null;
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return data as Integration | null;
   }
 
   async updateStatus(
     id: string,
     status: IntegrationStatus
   ): Promise<Integration> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('integrations')
-      .update({
-        status,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<Integration[]>(
+        `UPDATE integrations SET status = $1, updated_at = $2 WHERE id = $3 RETURNING *`,
+        [status, new Date().toISOString(), id]
+      );
+      return rows[0];
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return data as Integration;
   }
 
   async update(
@@ -111,35 +92,39 @@ export class IntegrationsRepository {
       provider_account_id: string;
     }>
   ): Promise<Integration> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data: updated, error } = await client
-      .from('integrations')
-      .update({
-        ...data,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      const fields: string[] = [];
+      const values: any[] = [];
+      let i = 1;
 
-    if (error) {
+      if (data.status !== undefined) {
+        fields.push(`status = $${i++}`);
+        values.push(data.status);
+      }
+      if (data.provider_account_id !== undefined) {
+        fields.push(`provider_account_id = $${i++}`);
+        values.push(data.provider_account_id);
+      }
+      
+      fields.push(`updated_at = $${i++}`);
+      values.push(new Date().toISOString());
+
+      values.push(id); // Where condition
+
+      const query = `UPDATE integrations SET ${fields.join(', ')} WHERE id = $${i} RETURNING *`;
+      const rows = await this.databaseService.query<Integration[]>(query, values);
+      return rows[0];
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return updated as Integration;
   }
 
   async delete(id: string): Promise<boolean> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { error } = await client
-      .from('integrations')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
+    try {
+      await this.databaseService.query(`DELETE FROM integrations WHERE id = $1`, [id]);
+      return true;
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return true;
   }
 }

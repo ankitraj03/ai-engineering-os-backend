@@ -1,12 +1,30 @@
 import { Injectable } from '@nestjs/common';
-import { SupabaseClientService } from '../../../database/supabase.client';
+import { DatabaseService } from '../../../database/database.service';
 import { OrganizationMembership } from '../entities/organization-membership.entity';
 import { MembershipRole, MembershipStatus } from '../../../common/types/enums';
 import { handleDatabaseError } from '../../../common/errors/database-error.util';
 
 @Injectable()
 export class OrganizationMembershipsRepository {
-  constructor(private readonly supabaseClientService: SupabaseClientService) {}
+  constructor(private readonly databaseService: DatabaseService) {}
+
+  private mapRowToMembership(row: any): OrganizationMembership {
+    if (!row) return row;
+    const membership = { ...row };
+    if (row.u_id) {
+      membership.user = {
+        id: row.u_id,
+        email: row.u_email,
+        full_name: row.u_full_name,
+        avatar_url: row.u_avatar_url,
+      };
+      delete membership.u_id;
+      delete membership.u_email;
+      delete membership.u_full_name;
+      delete membership.u_avatar_url;
+    }
+    return membership;
+  }
 
   async create(data: {
     organization_id: string;
@@ -14,169 +32,159 @@ export class OrganizationMembershipsRepository {
     role: MembershipRole;
     status?: MembershipStatus;
   }): Promise<OrganizationMembership> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data: membership, error } = await client
-      .from('organization_memberships')
-      .insert({
-        organization_id: data.organization_id,
-        user_id: data.user_id,
-        role: data.role,
-        status: data.status || MembershipStatus.ACTIVE,
-        joined_at:
-          data.status === MembershipStatus.INVITED
-            ? null
-            : new Date().toISOString(),
-      })
-      .select('*, user:users (*)')
-      .single();
-
-    if (error) {
+    try {
+      const status = data.status || MembershipStatus.ACTIVE;
+      const joinedAt = status === MembershipStatus.INVITED ? null : new Date().toISOString();
+      
+      const rows = await this.databaseService.query<any[]>(
+        `WITH inserted AS (
+           INSERT INTO organization_memberships (organization_id, user_id, role, status, joined_at)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *
+         )
+         SELECT m.*, u.id as u_id, u.email as u_email, u.full_name as u_full_name, u.avatar_url as u_avatar_url
+         FROM inserted m
+         LEFT JOIN users u ON m.user_id = u.id`,
+        [data.organization_id, data.user_id, data.role, status, joinedAt]
+      );
+      return this.mapRowToMembership(rows[0]);
+    } catch (error) {
       handleDatabaseError(error, 'OrganizationMembership');
     }
-
-    return membership as OrganizationMembership;
   }
 
   async findById(id: string): Promise<OrganizationMembership | null> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('organization_memberships')
-      .select('*, user:users (*)')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<any[]>(
+        `SELECT m.*, u.id as u_id, u.email as u_email, u.full_name as u_full_name, u.avatar_url as u_avatar_url
+         FROM organization_memberships m
+         LEFT JOIN users u ON m.user_id = u.id
+         WHERE m.id = $1 LIMIT 1`,
+        [id]
+      );
+      return this.mapRowToMembership(rows[0]) || null;
+    } catch (error) {
       handleDatabaseError(error, 'OrganizationMembership');
     }
-
-    return data as OrganizationMembership | null;
   }
 
   async findByUserAndOrganization(
     userId: string,
     organizationId: string
   ): Promise<OrganizationMembership | null> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('organization_memberships')
-      .select('*, user:users (*)')
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<any[]>(
+        `SELECT m.*, u.id as u_id, u.email as u_email, u.full_name as u_full_name, u.avatar_url as u_avatar_url
+         FROM organization_memberships m
+         LEFT JOIN users u ON m.user_id = u.id
+         WHERE m.user_id = $1 AND m.organization_id = $2 LIMIT 1`,
+        [userId, organizationId]
+      );
+      return this.mapRowToMembership(rows[0]) || null;
+    } catch (error) {
       handleDatabaseError(error, 'OrganizationMembership');
     }
-
-    return data as OrganizationMembership | null;
   }
 
   async findByOrganization(
     organizationId: string
   ): Promise<OrganizationMembership[]> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('organization_memberships')
-      .select('*, user:users (*)')
-      .eq('organization_id', organizationId)
-      .order('created_at', { ascending: true });
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<any[]>(
+        `SELECT m.*, u.id as u_id, u.email as u_email, u.full_name as u_full_name, u.avatar_url as u_avatar_url
+         FROM organization_memberships m
+         LEFT JOIN users u ON m.user_id = u.id
+         WHERE m.organization_id = $1
+         ORDER BY m.created_at ASC`,
+        [organizationId]
+      );
+      return rows.map(r => this.mapRowToMembership(r));
+    } catch (error) {
       handleDatabaseError(error, 'OrganizationMembership');
     }
-
-    return (data || []) as OrganizationMembership[];
   }
 
   async findByUser(userId: string): Promise<OrganizationMembership[]> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('organization_memberships')
-      .select('*')
-      .eq('user_id', userId);
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<OrganizationMembership[]>(
+        `SELECT * FROM organization_memberships WHERE user_id = $1`,
+        [userId]
+      );
+      return rows;
+    } catch (error) {
       handleDatabaseError(error, 'OrganizationMembership');
     }
-
-    return (data || []) as OrganizationMembership[];
   }
 
   async updateRole(
     id: string,
     role: MembershipRole
   ): Promise<OrganizationMembership> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('organization_memberships')
-      .update({
-        role,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select('*, user:users (*)')
-      .single();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<any[]>(
+        `WITH updated AS (
+           UPDATE organization_memberships 
+           SET role = $1, updated_at = $2 
+           WHERE id = $3 RETURNING *
+         )
+         SELECT m.*, u.id as u_id, u.email as u_email, u.full_name as u_full_name, u.avatar_url as u_avatar_url
+         FROM updated m
+         LEFT JOIN users u ON m.user_id = u.id`,
+        [role, new Date().toISOString(), id]
+      );
+      return this.mapRowToMembership(rows[0]);
+    } catch (error) {
       handleDatabaseError(error, 'OrganizationMembership');
     }
-
-    return data as OrganizationMembership;
   }
 
   async updateStatus(
     id: string,
     status: MembershipStatus
   ): Promise<OrganizationMembership> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('organization_memberships')
-      .update({
-        status,
-        joined_at:
-          status === MembershipStatus.ACTIVE
-            ? new Date().toISOString()
-            : undefined,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select('*, user:users (*)')
-      .single();
-
-    if (error) {
+    try {
+      const joinedAt = status === MembershipStatus.ACTIVE ? new Date().toISOString() : null;
+      let query = `UPDATE organization_memberships SET status = $1, updated_at = $2`;
+      let params = [status, new Date().toISOString(), id];
+      
+      if (joinedAt) {
+        query += `, joined_at = $4`;
+        params.push(joinedAt);
+      }
+      
+      query += ` WHERE id = $3 RETURNING *`;
+      
+      const rows = await this.databaseService.query<any[]>(
+        `WITH updated AS (${query})
+         SELECT m.*, u.id as u_id, u.email as u_email, u.full_name as u_full_name, u.avatar_url as u_avatar_url
+         FROM updated m
+         LEFT JOIN users u ON m.user_id = u.id`,
+        params
+      );
+      return this.mapRowToMembership(rows[0]);
+    } catch (error) {
       handleDatabaseError(error, 'OrganizationMembership');
     }
-
-    return data as OrganizationMembership;
   }
 
   async countOwners(organizationId: string): Promise<number> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { count, error } = await client
-      .from('organization_memberships')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .eq('role', MembershipRole.OWNER)
-      .eq('status', MembershipStatus.ACTIVE);
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<any[]>(
+        `SELECT COUNT(id) as count FROM organization_memberships
+         WHERE organization_id = $1 AND role = $2 AND status = $3`,
+        [organizationId, MembershipRole.OWNER, MembershipStatus.ACTIVE]
+      );
+      return parseInt(rows[0].count, 10) || 0;
+    } catch (error) {
       handleDatabaseError(error, 'OrganizationMembership');
     }
-
-    return count || 0;
   }
 
   async delete(id: string): Promise<boolean> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { error } = await client
-      .from('organization_memberships')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
+    try {
+      await this.databaseService.query(`DELETE FROM organization_memberships WHERE id = $1`, [id]);
+      return true;
+    } catch (error) {
       handleDatabaseError(error, 'OrganizationMembership');
     }
-
-    return true;
   }
 }
