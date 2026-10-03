@@ -1,14 +1,26 @@
-import { SupabaseClient } from '@supabase/supabase-js';
-import { getSupabaseAdminClient } from '../db/supabase';
+import { Repository } from 'typeorm';
+import { getDataSource } from '../db/data-source';
+import { IntegrationEntity } from '../entities/integration.entity';
 import { Integration } from '../models/integration.model';
 import { IntegrationProvider, IntegrationStatus } from '../models/enums';
 import { handleDatabaseError } from '../utils/database-error';
+import { NotFoundError } from '../utils/app-error';
 
 export class IntegrationsRepository {
-  private getClient: () => SupabaseClient;
+  private get repo(): Repository<IntegrationEntity> {
+    return getDataSource().getRepository(IntegrationEntity);
+  }
 
-  constructor(clientProvider?: () => SupabaseClient) {
-    this.getClient = clientProvider || (() => getSupabaseAdminClient());
+  private mapEntityToModel(entity: IntegrationEntity): Integration {
+    return {
+      id: entity.id,
+      organization_id: entity.organization_id,
+      provider: entity.provider,
+      provider_account_id: entity.provider_account_id,
+      status: entity.status,
+      created_at: entity.created_at instanceof Date ? entity.created_at.toISOString() : String(entity.created_at),
+      updated_at: entity.updated_at instanceof Date ? entity.updated_at.toISOString() : String(entity.updated_at),
+    };
   }
 
   async create(data: {
@@ -17,94 +29,73 @@ export class IntegrationsRepository {
     provider_account_id?: string;
     status?: IntegrationStatus;
   }): Promise<Integration> {
-    const client = this.getClient();
-    const { data: integration, error } = await client
-      .from('integrations')
-      .insert({
+    try {
+      const integration = this.repo.create({
         organization_id: data.organization_id,
         provider: data.provider,
         provider_account_id: data.provider_account_id || null,
         status: data.status || IntegrationStatus.ACTIVE,
-      })
-      .select()
-      .single();
+      });
 
-    if (error) {
+      const saved = await this.repo.save(integration);
+      return this.mapEntityToModel(saved);
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return integration as Integration;
   }
 
   async findById(id: string): Promise<Integration | null> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('integrations')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const item = await this.repo.findOneBy({ id });
+      return item ? this.mapEntityToModel(item) : null;
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return data as Integration | null;
   }
 
   async findByOrganization(organizationId: string): Promise<Integration[]> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('integrations')
-      .select('*')
-      .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
+    try {
+      const list = await this.repo.find({
+        where: { organization_id: organizationId },
+        order: { created_at: 'DESC' },
+      });
+      return list.map((i) => this.mapEntityToModel(i));
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return (data || []) as Integration[];
   }
 
   async findByProvider(
     organizationId: string,
     provider: string
   ): Promise<Integration | null> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('integrations')
-      .select('*')
-      .eq('organization_id', organizationId)
-      .eq('provider', provider)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const item = await this.repo.findOneBy({
+        organization_id: organizationId,
+        provider: provider as IntegrationProvider,
+      });
+      return item ? this.mapEntityToModel(item) : null;
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return data as Integration | null;
   }
 
   async updateStatus(
     id: string,
     status: IntegrationStatus
   ): Promise<Integration> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('integrations')
-      .update({
-        status,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      const existing = await this.repo.findOneBy({ id });
+      if (!existing) {
+        throw new NotFoundError(`Integration with ID "${id}" not found`);
+      }
 
-    if (error) {
+      await this.repo.update(id, { status });
+      const updated = await this.repo.findOneBy({ id });
+      return this.mapEntityToModel(updated!);
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return data as Integration;
   }
 
   async update(
@@ -114,36 +105,31 @@ export class IntegrationsRepository {
       provider_account_id: string;
     }>
   ): Promise<Integration> {
-    const client = this.getClient();
-    const { data: updated, error } = await client
-      .from('integrations')
-      .update({
-        ...data,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      const existing = await this.repo.findOneBy({ id });
+      if (!existing) {
+        throw new NotFoundError(`Integration with ID "${id}" not found`);
+      }
 
-    if (error) {
+      await this.repo.update(id, {
+        ...(data.status !== undefined ? { status: data.status } : {}),
+        ...(data.provider_account_id !== undefined ? { provider_account_id: data.provider_account_id } : {}),
+      });
+
+      const updated = await this.repo.findOneBy({ id });
+      return this.mapEntityToModel(updated!);
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return updated as Integration;
   }
 
   async delete(id: string): Promise<boolean> {
-    const client = this.getClient();
-    const { error } = await client
-      .from('integrations')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
+    try {
+      const result = await this.repo.delete(id);
+      return (result.affected ?? 0) > 0;
+    } catch (error) {
       handleDatabaseError(error, 'Integration');
     }
-
-    return true;
   }
 }
 

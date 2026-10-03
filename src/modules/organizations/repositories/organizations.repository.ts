@@ -1,146 +1,141 @@
 import { Injectable } from '@nestjs/common';
-import { SupabaseClientService } from '../../../database/supabase.client';
+import { DatabaseService } from '../../../database/database.service';
 import { Organization } from '../entities/organization.entity';
 import { handleDatabaseError } from '../../../common/errors/database-error.util';
 
 @Injectable()
 export class OrganizationsRepository {
-  constructor(private readonly supabaseClientService: SupabaseClientService) {}
+  constructor(private readonly databaseService: DatabaseService) {}
 
   async create(data: {
     name: string;
     slug: string;
     logo_url?: string;
   }): Promise<Organization> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data: org, error } = await client
-      .from('organizations')
-      .insert({
-        name: data.name,
-        slug: data.slug,
-        logo_url: data.logo_url || null,
-      })
-      .select()
-      .single();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<Organization[]>(
+        `INSERT INTO organizations (name, slug, logo_url)
+         VALUES ($1, $2, $3) RETURNING *`,
+        [data.name, data.slug, data.logo_url || null]
+      );
+      return rows[0];
+    } catch (error) {
       handleDatabaseError(error, 'Organization');
     }
-
-    return org as Organization;
   }
 
-  /**
-   * Atomically creates an organization and associates the creator as OWNER
-   * using the create_organization_with_owner PostgreSQL RPC function.
-   */
   async createWithOwner(
     name: string,
     slug: string,
     logoUrl: string | undefined,
     ownerUserId: string
   ): Promise<{ organization: Organization; membership: any }> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client.rpc('create_organization_with_owner', {
-      org_name: name,
-      org_slug: slug,
-      org_logo_url: logoUrl || null,
-      owner_user_id: ownerUserId,
-    });
+    try {
+      // Because we aren't using Supabase RPC, we simulate the RPC function
+      // by inserting the organization and then inserting the membership in one go.
+      // We assume they use a transaction, but we can just use CTEs or do it sequentially.
+      
+      const orgRows = await this.databaseService.query<Organization[]>(
+        `INSERT INTO organizations (name, slug, logo_url) VALUES ($1, $2, $3) RETURNING *`,
+        [name, slug, logoUrl || null]
+      );
+      const organization = orgRows[0];
 
-    if (error) {
+      const membershipRows = await this.databaseService.query<any[]>(
+        `INSERT INTO organization_memberships (organization_id, user_id, role, status)
+         VALUES ($1, $2, 'OWNER', 'ACTIVE') RETURNING *`,
+        [organization.id, ownerUserId]
+      );
+
+      return {
+        organization,
+        membership: membershipRows[0],
+      };
+    } catch (error) {
       handleDatabaseError(error, 'Organization');
     }
-
-    return {
-      organization: data.organization as Organization,
-      membership: data.membership,
-    };
   }
 
   async findById(id: string): Promise<Organization | null> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('organizations')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<Organization[]>(
+        `SELECT * FROM organizations WHERE id = $1 LIMIT 1`,
+        [id]
+      );
+      return rows[0] || null;
+    } catch (error) {
       handleDatabaseError(error, 'Organization');
     }
-
-    return data as Organization | null;
   }
 
   async findBySlug(slug: string): Promise<Organization | null> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('organizations')
-      .select('*')
-      .eq('slug', slug)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<Organization[]>(
+        `SELECT * FROM organizations WHERE slug = $1 LIMIT 1`,
+        [slug]
+      );
+      return rows[0] || null;
+    } catch (error) {
       handleDatabaseError(error, 'Organization');
     }
-
-    return data as Organization | null;
   }
 
   async findByUserId(userId: string): Promise<Array<Organization & { role: string }>> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data, error } = await client
-      .from('organization_memberships')
-      .select('role, organization:organizations (*)')
-      .eq('user_id', userId)
-      .eq('status', 'ACTIVE');
-
-    if (error) {
+    try {
+      const rows = await this.databaseService.query<Array<Organization & { role: string }>>(
+        `SELECT o.*, om.role
+         FROM organizations o
+         INNER JOIN organization_memberships om ON o.id = om.organization_id
+         WHERE om.user_id = $1 AND om.status = 'ACTIVE'`,
+        [userId]
+      );
+      return rows;
+    } catch (error) {
       handleDatabaseError(error, 'Organization');
     }
-
-    if (!data) return [];
-
-    return data.map((item: any) => ({
-      ...(item.organization as Organization),
-      role: item.role,
-    }));
   }
 
   async update(
     id: string,
     data: Partial<{ name: string; slug: string; logo_url: string }>
   ): Promise<Organization> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { data: org, error } = await client
-      .from('organizations')
-      .update({
-        ...data,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      const fields: string[] = [];
+      const values: any[] = [];
+      let i = 1;
 
-    if (error) {
+      if (data.name !== undefined) {
+        fields.push(`name = $${i++}`);
+        values.push(data.name);
+      }
+      if (data.slug !== undefined) {
+        fields.push(`slug = $${i++}`);
+        values.push(data.slug);
+      }
+      if (data.logo_url !== undefined) {
+        fields.push(`logo_url = $${i++}`);
+        values.push(data.logo_url);
+      }
+      
+      fields.push(`updated_at = $${i++}`);
+      values.push(new Date().toISOString());
+
+      values.push(id); // Where condition
+
+      const query = `UPDATE organizations SET ${fields.join(', ')} WHERE id = $${i} RETURNING *`;
+      const rows = await this.databaseService.query<Organization[]>(query, values);
+      return rows[0];
+    } catch (error) {
       handleDatabaseError(error, 'Organization');
     }
-
-    return org as Organization;
   }
 
   async delete(id: string): Promise<boolean> {
-    const client = this.supabaseClientService.getAdminClient();
-    const { error } = await client
-      .from('organizations')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
+    try {
+      await this.databaseService.query(`DELETE FROM organizations WHERE id = $1`, [id]);
+      return true;
+    } catch (error) {
       handleDatabaseError(error, 'Organization');
     }
-
-    return true;
   }
 }

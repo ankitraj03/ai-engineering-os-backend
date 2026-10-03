@@ -7,13 +7,13 @@ import {
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { MembershipRole } from '../types/enums';
-import { SupabaseClientService } from '../../database/supabase.client';
+import { DatabaseService } from '../../database/database.service';
 
 @Injectable()
 export class OrgRoleGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
-    private readonly supabaseClientService: SupabaseClientService
+    private readonly databaseService: DatabaseService
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -43,29 +43,33 @@ export class OrgRoleGuard implements CanActivate {
       return true;
     }
 
-    const client = this.supabaseClientService.getAdminClient();
-    const { data: membership, error } = await client
-      .from('organization_memberships')
-      .select('role, status')
-      .eq('organization_id', organizationId)
-      .eq('user_id', user.id)
-      .eq('status', 'ACTIVE')
-      .maybeSingle();
-
-    if (error || !membership) {
-      throw new ForbiddenException(
-        'You do not have an active membership in this organization'
+    try {
+      const rows = await this.databaseService.query<any[]>(
+        `SELECT role, status FROM organization_memberships
+         WHERE organization_id = $1 AND user_id = $2 AND status = 'ACTIVE' LIMIT 1`,
+        [organizationId, user.id]
       );
-    }
+      
+      const membership = rows[0];
 
-    const hasRole = requiredRoles.includes(membership.role as MembershipRole);
-    if (!hasRole) {
-      throw new ForbiddenException(
-        `Insufficient permissions. Required role: [${requiredRoles.join(', ')}]. Current role: ${membership.role}`
-      );
-    }
+      if (!membership) {
+        throw new ForbiddenException(
+          'You do not have an active membership in this organization'
+        );
+      }
 
-    request.membership = membership;
-    return true;
+      const hasRole = requiredRoles.includes(membership.role as MembershipRole);
+      if (!hasRole) {
+        throw new ForbiddenException(
+          `Insufficient permissions. Required role: [${requiredRoles.join(', ')}]. Current role: ${membership.role}`
+        );
+      }
+
+      request.membership = membership;
+      return true;
+    } catch (error: any) {
+      if (error instanceof ForbiddenException) throw error;
+      throw new ForbiddenException('Error verifying organization role');
+    }
   }
 }

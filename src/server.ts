@@ -1,9 +1,53 @@
 import { app } from './app';
 import { envConfig } from './config/env.config';
-import { postgresManager } from './db/postgres';
+import { initializeDatabase, closeDatabase } from './db/data-source';
+import { maskDatabaseUrl } from './config/database.config';
 import { logger } from './utils/logger';
 
+/**
+ * Validate required environment variables during startup.
+ * Halts startup immediately if mandatory variables are missing.
+ */
+function validateEnvironment(): void {
+  const databaseUrl = process.env.DATABASE_URL;
+
+  if (!databaseUrl || databaseUrl.trim() === '') {
+    logger.error('================================================================');
+    logger.error('DATABASE_URL is not configured');
+    logger.error('Please configure DATABASE_URL in .env before starting the server.');
+    logger.error('================================================================');
+    process.exit(1);
+  }
+
+  if (!process.env.PORT && !envConfig.port) {
+    logger.warn('PORT not explicitly configured; using default port 4000.');
+  }
+
+  if (!process.env.CORS_ORIGIN && !envConfig.corsOrigin) {
+    logger.warn('CORS_ORIGIN not explicitly configured; using default http://localhost:3000.');
+  }
+}
+
 async function startServer() {
+  logger.log('🚀 Starting AI Engineering OS Backend...');
+
+  // 1. Validate required environment variables
+  validateEnvironment();
+
+  // 2. Initialize TypeORM DataSource and connect to PostgreSQL
+  try {
+    await initializeDatabase();
+  } catch (error: unknown) {
+    const err = error as Error;
+    const sanitizedError = maskDatabaseUrl(err.message);
+    logger.error('================================================================');
+    logger.error(`Database connection failed: ${sanitizedError}`);
+    logger.error('Server startup halted due to database connection failure.');
+    logger.error('================================================================');
+    process.exit(1);
+  }
+
+  // 3. Start HTTP server only after database is connected
   const port = envConfig.port;
 
   const server = app.listen(port, () => {
@@ -17,7 +61,7 @@ async function startServer() {
     logger.log('================================================================');
   });
 
-  // Graceful shutdown
+  // Graceful shutdown handling
   const shutdown = async (signal: string) => {
     logger.log(`\nReceived ${signal}. Shutting down gracefully...`);
 
@@ -25,17 +69,16 @@ async function startServer() {
       logger.log('Closed out remaining HTTP connections.');
 
       try {
-        await postgresManager.close();
-        logger.log('PostgreSQL database pool closed cleanly.');
+        await closeDatabase();
       } catch (err: unknown) {
         const error = err as Error;
-        logger.error(`Error closing database pool: ${error.message}`);
+        logger.error(`Error closing database connection: ${maskDatabaseUrl(error.message)}`);
       }
 
       process.exit(0);
     });
 
-    // Force shutdown after 10s if connections don't drain
+    // Force shutdown after 10s if connections do not drain
     setTimeout(() => {
       logger.error('Could not close connections in time, forcefully shutting down');
       process.exit(1);
@@ -48,6 +91,6 @@ async function startServer() {
 
 startServer().catch((err: unknown) => {
   const error = err as Error;
-  logger.error(`Fatal startup error: ${error.message}`, error.stack);
+  logger.error(`Fatal startup error: ${maskDatabaseUrl(error.message)}`, error.stack);
   process.exit(1);
 });

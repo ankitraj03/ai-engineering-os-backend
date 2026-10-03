@@ -1,90 +1,96 @@
-import { SupabaseClient } from '@supabase/supabase-js';
-import { getSupabaseAdminClient } from '../db/supabase';
+import { Repository } from 'typeorm';
+import { getDataSource } from '../db/data-source';
+import { UserEntity } from '../entities/user.entity';
 import { User } from '../models/user.model';
 import { handleDatabaseError } from '../utils/database-error';
+import { NotFoundError } from '../utils/app-error';
+import { randomUUID } from 'crypto';
 
 export class UsersRepository {
-  private getClient: () => SupabaseClient;
+  private get repo(): Repository<UserEntity> {
+    return getDataSource().getRepository(UserEntity);
+  }
 
-  constructor(clientProvider?: () => SupabaseClient) {
-    this.getClient = clientProvider || (() => getSupabaseAdminClient());
+  private mapEntityToModel(entity: UserEntity): User & { password_hash?: string | null } {
+    return {
+      id: entity.id,
+      email: entity.email,
+      full_name: entity.full_name,
+      avatar_url: entity.avatar_url,
+      created_at: entity.created_at instanceof Date ? entity.created_at.toISOString() : String(entity.created_at),
+      updated_at: entity.updated_at instanceof Date ? entity.updated_at.toISOString() : String(entity.updated_at),
+      password_hash: entity.password_hash,
+    };
   }
 
   async create(userData: {
-    id: string;
+    id?: string;
     email: string;
+    password?: string;
+    password_hash?: string;
     full_name?: string;
     avatar_url?: string;
+    bio?: string;
+    timezone?: string;
   }): Promise<User> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('users')
-      .insert({
-        id: userData.id,
+    try {
+      const newUser = this.repo.create({
+        id: userData.id || randomUUID(),
         email: userData.email,
+        password_hash: userData.password_hash || userData.password || null,
         full_name: userData.full_name || null,
         avatar_url: userData.avatar_url || null,
-      })
-      .select()
-      .single();
+        bio: userData.bio || null,
+        timezone: userData.timezone || 'UTC',
+      });
 
-    if (error) {
+      const saved = await this.repo.save(newUser);
+      return this.mapEntityToModel(saved);
+    } catch (error) {
       handleDatabaseError(error, 'User');
     }
-
-    return data as User;
   }
 
   async findById(id: string): Promise<User | null> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('users')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const user = await this.repo.findOneBy({ id });
+      return user ? this.mapEntityToModel(user) : null;
+    } catch (error) {
       handleDatabaseError(error, 'User');
     }
-
-    return data as User | null;
   }
 
   async findByEmail(email: string): Promise<User | null> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('users')
-      .select('*')
-      .eq('email', email)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const user = await this.repo.findOneBy({ email });
+      return user ? this.mapEntityToModel(user) : null;
+    } catch (error) {
       handleDatabaseError(error, 'User');
     }
-
-    return data as User | null;
   }
 
   async update(
     id: string,
-    updateData: Partial<{ full_name: string; avatar_url: string }>
+    updateData: Partial<{ full_name: string; avatar_url: string; bio: string; timezone: string }>
   ): Promise<User> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('users')
-      .update({
-        ...updateData,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      const existing = await this.repo.findOneBy({ id });
+      if (!existing) {
+        throw new NotFoundError(`User with ID "${id}" not found`);
+      }
 
-    if (error) {
+      await this.repo.update(id, {
+        ...(updateData.full_name !== undefined ? { full_name: updateData.full_name } : {}),
+        ...(updateData.avatar_url !== undefined ? { avatar_url: updateData.avatar_url } : {}),
+        ...(updateData.bio !== undefined ? { bio: updateData.bio } : {}),
+        ...(updateData.timezone !== undefined ? { timezone: updateData.timezone } : {}),
+      });
+
+      const updated = await this.repo.findOneBy({ id });
+      return this.mapEntityToModel(updated!);
+    } catch (error) {
       handleDatabaseError(error, 'User');
     }
-
-    return data as User;
   }
 
   async upsert(userData: {
@@ -93,35 +99,31 @@ export class UsersRepository {
     full_name?: string;
     avatar_url?: string;
   }): Promise<User> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('users')
-      .upsert({
-        id: userData.id,
-        email: userData.email,
-        full_name: userData.full_name || null,
-        avatar_url: userData.avatar_url || null,
-        updated_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+    try {
+      await this.repo.upsert(
+        {
+          id: userData.id,
+          email: userData.email,
+          full_name: userData.full_name || null,
+          avatar_url: userData.avatar_url || null,
+        },
+        ['id']
+      );
 
-    if (error) {
+      const user = await this.repo.findOneBy({ id: userData.id });
+      return this.mapEntityToModel(user!);
+    } catch (error) {
       handleDatabaseError(error, 'User');
     }
-
-    return data as User;
   }
 
   async delete(id: string): Promise<boolean> {
-    const client = this.getClient();
-    const { error } = await client.from('users').delete().eq('id', id);
-
-    if (error) {
+    try {
+      const result = await this.repo.delete(id);
+      return (result.affected ?? 0) > 0;
+    } catch (error) {
       handleDatabaseError(error, 'User');
     }
-
-    return true;
   }
 }
 

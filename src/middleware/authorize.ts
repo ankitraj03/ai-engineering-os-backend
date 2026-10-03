@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import { MembershipRole } from '../models/enums';
+import { MembershipRole, MembershipStatus } from '../models/enums';
 import { ForbiddenError } from '../utils/app-error';
-import { getSupabaseAdminClient } from '../db/supabase';
+import { organizationMembershipsRepository } from '../repositories/membership.repository';
 
 export function authorizeOrgRole(...requiredRoles: MembershipRole[]) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
@@ -25,16 +25,12 @@ export function authorizeOrgRole(...requiredRoles: MembershipRole[]) {
     }
 
     try {
-      const client = getSupabaseAdminClient();
-      const { data: membership, error } = await client
-        .from('organization_memberships')
-        .select('role, status')
-        .eq('organization_id', organizationId)
-        .eq('user_id', user.id)
-        .eq('status', 'ACTIVE')
-        .maybeSingle();
+      const membership = await organizationMembershipsRepository.findByUserAndOrganization(
+        user.id,
+        organizationId
+      );
 
-      if (error || !membership) {
+      if (!membership || membership.status !== MembershipStatus.ACTIVE) {
         return next(
           new ForbiddenError(
             'You do not have an active membership in this organization'

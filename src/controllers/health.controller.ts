@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { postgresManager } from '../db/postgres';
+import { pingDatabase } from '../db/data-source';
 
 export class HealthController {
   getHealth(_req: Request, res: Response): void {
@@ -11,23 +11,21 @@ export class HealthController {
 
   async getDatabaseHealth(_req: Request, res: Response): Promise<void> {
     try {
-      const ping = await postgresManager.ping();
+      const ping = await pingDatabase();
       res.status(200).json({
-        status: 'healthy',
-        database: 'postgresql',
+        status: 'ok',
+        database: 'connected',
         timestamp: new Date().toISOString(),
         latencyMs: ping.latencyMs,
         serverTime: ping.serverTime,
         version: ping.version,
       });
-    } catch (err: unknown) {
-      const error = err as Error;
+    } catch {
+      // Do not expose database passwords, full DATABASE_URL, or credentials
       res.status(503).json({
-        status: 'unhealthy',
-        database: 'postgresql',
+        status: 'error',
+        database: 'disconnected',
         timestamp: new Date().toISOString(),
-        latencyMs: -1,
-        error: error.message || 'Database connection failure',
       });
     }
   }

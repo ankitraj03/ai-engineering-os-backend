@@ -1,13 +1,26 @@
-import { SupabaseClient } from '@supabase/supabase-js';
-import { getSupabaseAdminClient } from '../db/supabase';
+import { Repository } from 'typeorm';
+import { getDataSource } from '../db/data-source';
+import { GitOrganizationEntity } from '../entities/git-organization.entity';
 import { GitOrganization } from '../models/git-organization.model';
 import { handleDatabaseError } from '../utils/database-error';
+import { NotFoundError } from '../utils/app-error';
 
 export class GitOrganizationsRepository {
-  private getClient: () => SupabaseClient;
+  private get repo(): Repository<GitOrganizationEntity> {
+    return getDataSource().getRepository(GitOrganizationEntity);
+  }
 
-  constructor(clientProvider?: () => SupabaseClient) {
-    this.getClient = clientProvider || (() => getSupabaseAdminClient());
+  private mapEntityToModel(entity: GitOrganizationEntity): GitOrganization {
+    return {
+      id: entity.id,
+      integration_id: entity.integration_id,
+      external_id: entity.external_id,
+      name: entity.name,
+      login: entity.login,
+      avatar_url: entity.avatar_url,
+      created_at: entity.created_at instanceof Date ? entity.created_at.toISOString() : String(entity.created_at),
+      updated_at: entity.updated_at instanceof Date ? entity.updated_at.toISOString() : String(entity.updated_at),
+    };
   }
 
   async create(data: {
@@ -17,75 +30,56 @@ export class GitOrganizationsRepository {
     login: string;
     avatar_url?: string;
   }): Promise<GitOrganization> {
-    const client = this.getClient();
-    const { data: gitOrg, error } = await client
-      .from('git_organizations')
-      .insert({
+    try {
+      const gitOrg = this.repo.create({
         integration_id: data.integration_id,
         external_id: data.external_id,
         name: data.name || null,
         login: data.login,
         avatar_url: data.avatar_url || null,
-      })
-      .select()
-      .single();
+      });
 
-    if (error) {
+      const saved = await this.repo.save(gitOrg);
+      return this.mapEntityToModel(saved);
+    } catch (error) {
       handleDatabaseError(error, 'GitOrganization');
     }
-
-    return gitOrg as GitOrganization;
   }
 
   async findById(id: string): Promise<GitOrganization | null> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('git_organizations')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const item = await this.repo.findOneBy({ id });
+      return item ? this.mapEntityToModel(item) : null;
+    } catch (error) {
       handleDatabaseError(error, 'GitOrganization');
     }
-
-    return data as GitOrganization | null;
   }
 
-  async findByIntegration(
-    integrationId: string
-  ): Promise<GitOrganization[]> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('git_organizations')
-      .select('*')
-      .eq('integration_id', integrationId)
-      .order('created_at', { ascending: true });
-
-    if (error) {
+  async findByIntegration(integrationId: string): Promise<GitOrganization[]> {
+    try {
+      const list = await this.repo.find({
+        where: { integration_id: integrationId },
+        order: { created_at: 'ASC' },
+      });
+      return list.map((g) => this.mapEntityToModel(g));
+    } catch (error) {
       handleDatabaseError(error, 'GitOrganization');
     }
-
-    return (data || []) as GitOrganization[];
   }
 
   async findByExternalId(
     integrationId: string,
     externalId: string
   ): Promise<GitOrganization | null> {
-    const client = this.getClient();
-    const { data, error } = await client
-      .from('git_organizations')
-      .select('*')
-      .eq('integration_id', integrationId)
-      .eq('external_id', externalId)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const item = await this.repo.findOneBy({
+        integration_id: integrationId,
+        external_id: externalId,
+      });
+      return item ? this.mapEntityToModel(item) : null;
+    } catch (error) {
       handleDatabaseError(error, 'GitOrganization');
     }
-
-    return data as GitOrganization | null;
   }
 
   async update(
@@ -96,36 +90,32 @@ export class GitOrganizationsRepository {
       avatar_url: string;
     }>
   ): Promise<GitOrganization> {
-    const client = this.getClient();
-    const { data: updated, error } = await client
-      .from('git_organizations')
-      .update({
-        ...data,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      const existing = await this.repo.findOneBy({ id });
+      if (!existing) {
+        throw new NotFoundError(`Git organization with ID "${id}" not found`);
+      }
 
-    if (error) {
+      await this.repo.update(id, {
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.login !== undefined ? { login: data.login } : {}),
+        ...(data.avatar_url !== undefined ? { avatar_url: data.avatar_url } : {}),
+      });
+
+      const updated = await this.repo.findOneBy({ id });
+      return this.mapEntityToModel(updated!);
+    } catch (error) {
       handleDatabaseError(error, 'GitOrganization');
     }
-
-    return updated as GitOrganization;
   }
 
   async delete(id: string): Promise<boolean> {
-    const client = this.getClient();
-    const { error } = await client
-      .from('git_organizations')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
+    try {
+      const result = await this.repo.delete(id);
+      return (result.affected ?? 0) > 0;
+    } catch (error) {
       handleDatabaseError(error, 'GitOrganization');
     }
-
-    return true;
   }
 }
 

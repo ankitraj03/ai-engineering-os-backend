@@ -2,7 +2,10 @@ import * as dotenv from 'dotenv';
 import * as path from 'path';
 
 // Load .env from backend root or parent directory
-dotenv.config({ path: [path.resolve(process.cwd(), '.env'), path.resolve(process.cwd(), '../.env')] });
+dotenv.config({
+  path: [path.resolve(process.cwd(), '.env'), path.resolve(process.cwd(), '../.env')],
+  override: true,
+});
 
 export interface AppConfig {
   port: number;

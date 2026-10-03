@@ -10,6 +10,7 @@ export interface OrganizationMembership {
   joined_at: string | null;
   created_at: string;
   updated_at: string;
+  user?: UserResponse;
 }
 
 export interface MembershipResponse {

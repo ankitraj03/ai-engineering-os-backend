@@ -5,10 +5,18 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { PostgrestError } from '@supabase/supabase-js';
+
+export interface DatabaseErrorDetails {
+  code?: string;
+  message?: string;
+  detail?: string;
+  details?: string;
+  table?: string;
+  constraint?: string;
+}
 
 export function handleDatabaseError(
-  error: PostgrestError | Error | null | unknown,
+  error: DatabaseErrorDetails | Error | null | unknown,
   entityName = 'Resource'
 ): never {
   if (!error) {
@@ -19,25 +27,26 @@ export function handleDatabaseError(
     throw error;
   }
 
-  const pgError = error as PostgrestError;
+  const pgError = error as DatabaseErrorDetails;
+  const detail = pgError.detail || pgError.details || pgError.message || '';
 
-  // Postgrest / PostgreSQL error codes
+  // PostgreSQL standard error codes
   switch (pgError.code) {
     case '23505': // Unique violation
       throw new ConflictException(
-        `${entityName} already exists or unique constraint was violated: ${pgError.details || pgError.message}`
+        `${entityName} already exists or unique constraint was violated: ${detail}`
       );
     case '23503': // Foreign key violation
       throw new BadRequestException(
-        `Invalid reference in ${entityName}: ${pgError.details || pgError.message}`
+        `Invalid reference in ${entityName}: ${detail}`
       );
     case '23502': // Not null violation
       throw new BadRequestException(
-        `Missing required fields for ${entityName}: ${pgError.details || pgError.message}`
+        `Missing required fields for ${entityName}: ${detail}`
       );
     case '22P02': // Invalid text representation (e.g. invalid UUID)
       throw new BadRequestException(
-        `Invalid format or ID for ${entityName}: ${pgError.message}`
+        `Invalid format or ID for ${entityName}: ${pgError.message || detail}`
       );
     case 'PGRST116': // Single row not found
       throw new NotFoundException(`${entityName} not found`);
