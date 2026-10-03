@@ -10,6 +10,9 @@ async function bootstrap() {
       logger: ['log', 'error', 'warn', 'debug', 'verbose'],
     });
 
+    // Adding global prefix "api"
+    // app.setGlobalPrefix('api');
+
     // Enable CORS for frontend integration (Next.js default port: 3000)
     app.enableCors({
       origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
